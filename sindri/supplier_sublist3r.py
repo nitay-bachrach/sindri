@@ -1,5 +1,6 @@
 import sys
 
+from .exceptions import SindriSupplierNotFound, SindriSupplierFailedError
 
 def get_subdomains(domain):
     stdout = sys.stdout
@@ -19,5 +20,9 @@ def get_subdomains(domain):
             enable_bruteforce=False,
             engines=None,
         )
+    except ImportError:
+        raise SindriSupplierNotFound()
+    except Exception as e:
+        raise SindriSupplierFailedError(*e.args) from e
     finally:
         sys.stdout = stdout

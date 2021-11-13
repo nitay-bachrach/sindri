@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 from dns.resolver import Resolver
 
+from . import exceptions
+
 COMMON_2D_DOMAINS = ["com.", "co.", "org.", "gov.", "net.", "mil."]
 
 
@@ -64,6 +66,7 @@ def get_sub_services(
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("domain")
     parser.add_argument(
         "-n", nargs="*", help="Name servers", default=["8.8.8.8", "1.1.1.1"]
     )
@@ -76,26 +79,34 @@ def main():
         help="Export found subdomains",
     )
     parser.add_argument(
-        "--supplier", help="How to list subdomains", default=["sublist3r"], nargs="+"
+        "--supplier", help="How to list subdomains", default=["amass"], nargs="+"
     )
-    parser.add_argument("domain")
     args = parser.parse_args()
 
     try:
         supplier = args.supplier[0]
         module = importlib.import_module(f".supplier_{supplier}", package="sindri")
     except ImportError:
-        print(f"Cannot load supplier {supplier}")
-        return 1
+        print(f"Cannot find supplier {supplier}", file=sys.stderr)
+        return 0xF0
 
     if not hasattr(module, "get_subdomains"):
         print(
             f"Supplier {args.supplier} does not export the required function 'get_subdomains'"
         )
-        return 2
+        return 0x04
 
-    subdomains = module.get_subdomains(args.domain, *args.supplier[1:])
-    print(f"{len(subdomains)} domains found", file=sys.stderr)
+    try:
+        subdomains = module.get_subdomains(args.domain, *args.supplier[1:])
+
+    except exceptions.SindriSupplierNotFound:
+        print(f"Cannot load supplier {supplier}", file=sys.stderr)
+        return 0x01
+    except exceptions.SindriSupplierFailedError as e:
+        print(f"Supplier failed: {e.args}", file=sys.stderr)
+        return 0x02
+
+    print(f"{len(subdomains)} domains found")
     if args.sdomains_out:
         args.sdomains_out.write("\n".join(subdomains))
 
