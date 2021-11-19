@@ -1,0 +1,4 @@
+blacklist:
+- mail
+suppliers:
+- amass

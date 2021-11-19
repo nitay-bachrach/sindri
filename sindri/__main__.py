@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import typing
 import json
@@ -8,8 +9,10 @@ import importlib
 from urllib.parse import urlsplit
 
 from dns.resolver import Resolver
+import yaml
 
 from . import exceptions
+from .consts import SINDRI_CONFIG
 
 COMMON_2D_DOMAINS = ["com.", "co.", "org.", "gov.", "net.", "mil."]
 
@@ -71,6 +74,7 @@ def main():
         "-n", nargs="*", help="Name servers", default=["8.8.8.8", "1.1.1.1"]
     )
     parser.add_argument("-j", action="store_true", help="JSON Output")
+    parser.add_argument("-c", "--config", dest="config", type=argparse.FileType("r"))
     parser.add_argument(
         "--subdomains-output",
         "--so",
@@ -79,36 +83,48 @@ def main():
         help="Export found subdomains",
     )
     parser.add_argument(
-        "--supplier", help="How to list subdomains", default=["amass"], nargs="+"
+        "--supplier", help="How to list subdomains", default=[], nargs="+"
     )
     args = parser.parse_args()
 
-    try:
-        supplier = args.supplier[0]
-        module = importlib.import_module(f".supplier_{supplier}", package="sindri")
-    except ImportError:
-        print(f"Cannot find supplier {supplier}", file=sys.stderr)
-        return 0xF0
+    if args.config:
+        config = yaml.safe_load(args.config)
+    elif os.path.exists(os.path.join(SINDRI_CONFIG, "config.yaml")):
+        with open(os.path.join(SINDRI_CONFIG, "config.yaml")) as f:
+            config = yaml.safe_load(f)
+    else:
+        config = {}
 
-    if not hasattr(module, "get_subdomains"):
-        print(
-            f"Supplier {args.supplier} does not export the required function 'get_subdomains'"
-        )
-        return 0x04
+    subdomains = []
+    for supplier in (args.supplier or config.get("suppliers", ["amass"])):
+        try:
+            module = importlib.import_module(f".supplier_{supplier}", package="sindri")
+        except ImportError:
+            print(f"Cannot find supplier {supplier}", file=sys.stderr)
+            return 0xF0
 
-    try:
-        subdomains = module.get_subdomains(args.domain, *args.supplier[1:])
+        if not hasattr(module, "get_subdomains"):
+            print(
+                f"Supplier {args.supplier} does not export the required function 'get_subdomains'"
+            )
+            return 0x04
 
-    except exceptions.SindriSupplierNotFound:
-        print(f"Cannot load supplier {supplier}", file=sys.stderr)
-        return 0x01
-    except exceptions.SindriSupplierFailedError as e:
-        print(f"Supplier failed: {e.args}", file=sys.stderr)
-        return 0x02
+        try:
+            subdomains.extend(module.get_subdomains(args.domain, *args.supplier[1:]))
+
+        except exceptions.SindriSupplierNotFound:
+            print(f"Cannot load supplier {supplier}", file=sys.stderr)
+        except exceptions.SindriSupplierFailedError as e:
+            print(f"Supplier failed: {e.args}", file=sys.stderr)
 
     print(f"{len(subdomains)} domains found")
     if args.sdomains_out:
         args.sdomains_out.write("\n".join(subdomains))
+
+    if config.get("blacklist"):
+        # Remove domains with blacklist words, unless it's part of the domain itself
+        subdomains = [s for s in subdomains if not any(bl in s.replace(args.domain, "") for bl in config["blacklist"])]
+        print(f"Checking {len(subdomains)} domains after filter")
 
     result = get_sub_services(subdomains, args.domain, args.n)
     if args.j:
